@@ -37,30 +37,42 @@ public class TelegramNotification implements Notification {
 
 	private static final Logger LOG = getLogger(TelegramNotification.class.getName());
 
-	private static final String BOT_ID = loadBotId();
-	private static final String SEND_MESSAGE_URL = "https://api.telegram.org/bot" + BOT_ID + "/sendMessage?chat_id=%1$s&text=%2$s&parse_mode=html";
+	private final String BOT_ID = loadBotId();
+	private final String SEND_MESSAGE_URL = "https://api.telegram.org/bot" + BOT_ID + "/sendMessage?chat_id=%1$s&text=%2$s&parse_mode=html";
+
+	// based on proper configuration
+	private boolean sendingEnabled = true;
 
 	/**
-	 * The subject of the provided message will be automatically formated as
-	 * bold and the message body will be placed on the next line. If different
-	 * approach is desired, then use only message body.
+	 * The subject of the provided message will be automatically formated as bold
+	 * and the message body will be placed on the next line. If different approach
+	 * is desired, then use only message body.
 	 * <p>
-	 * <b>Note:</b> This implementation supports only HTML parse mode, the usage
-	 * is described here:
+	 * <b>Note:</b> This implementation supports only HTML parse mode, the usage is
+	 * described here:
 	 * <a href="https://core.telegram.org/bots/api#formatting-options">telegram
 	 * formatting options</a>
 	 *
-	 * @throws IllegalArgumentException
-	 *             if message is {@code null} or empty or recipient's
-	 *             {@code otherAddress} is {@code null} or empty
+	 * Does not even try to send the notification message if message is {@code null}
+	 * or empty or recipient's {@code otherAddress} is {@code null} or empty
 	 */
 	@Override
 	public NotificationResult sendNotification(Message message, Recipient recipient) {
-		validateMessage(message);
-		validateRecipient(recipient);
+		requireNonNull(message, "message cannot be null");
+		requireNonNull(recipient, "recipient cannot be null");
+
+		if (!sendingEnabled) {
+			return failure("Can not send Telegram message - missing proper configuration, check logs for missing variables");
+		} else if ((isBlank(message.getSubject()) && isBlank(message.getBody())) || isBlank(recipient.getOtherAddress())) {
+			return failure("Can not send Telegram message - none of message subject or body is present or recipient's chat id is missing");
+		}
 
 		String chatId = recipient.getOtherAddress();
 		return sendTelegramMessage(BOT_ID, chatId, formatMessage(message));
+	}
+
+	private boolean isBlank(String value) {
+		return isNull(value) || value.trim().isEmpty();
 	}
 
 	private String formatMessage(Message message) {
@@ -91,7 +103,7 @@ public class TelegramNotification implements Notification {
 			String responseMessage = httpRequest.getResponseMessage();
 			httpRequest.disconnect();
 			if (responseCode != 200) {
-				return failure(responseMessage);
+				return failure("Unsuccessful attempt to send Telegram notification the server returned: " + responseMessage);
 			}
 		} catch (IOException ioex) {
 			return failure("Unable to send Telegram notification", ioex);
@@ -100,7 +112,7 @@ public class TelegramNotification implements Notification {
 				LOG.fine("Calling " + finalUrl + (currentTimeMillis() - callStart) + "ms");
 			}
 		}
-		return success();
+		return success("Telegram message sent successfully");
 	}
 
 	private String encodeUrlMessage(String message) {
@@ -111,25 +123,16 @@ public class TelegramNotification implements Notification {
 		}
 	}
 
-	private static String loadBotId() {
+	private String loadBotId() {
 		String botId = System.getenv("telegram_bot_id");
-		if (botId == null || botId.trim().isEmpty()) {
-			throw new IllegalStateException("${telegram_bot_id} environment varible must be set to use telegram notifications");
+		if (isBlank(botId)) {
+			LOG.warning("${telegram_bot_id} environment varible must be set to use telegram notifications");
+			disableSending();
 		}
 		return botId;
 	}
 
-	private static void validateMessage(Message message) {
-		requireNonNull(message, "message cannot be null");
-		if (isNull(message.getSubject()) && isNull(message.getBody())) {
-			throw new IllegalArgumentException("message cannot be empty");
-		}
-	}
-
-	private static void validateRecipient(Recipient recipient) {
-		requireNonNull(recipient, "recipient cannot be null");
-		if (isNull(recipient.getOtherAddress())) {
-			throw new IllegalArgumentException("recipient/chat for telegram notification should be defined by the 'other address'");
-		}
+	private void disableSending() {
+		sendingEnabled = false;
 	}
 }
